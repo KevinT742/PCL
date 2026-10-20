@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  workflows: write
+
 
 jobs:
   build:
@@ -39,9 +41,19 @@ jobs:
 
       - name: 还原自定义文件
         run: |
-          Copy-Item -Recurse -Force _backup/.patches ./
-          Copy-Item -Recurse -Force _backup/.github ./
-          Remove-Item -Recurse -Force _backup
+          # 只还原你自己的工作流和补丁，不动上游的 .github 其他文件
+          Copy-Item "$env:RUNNER_TEMP\bak\.patches" ".\" -Recurse -Force
+          # 精确还原你自己的工作流文件，而不是整个 .github
+          New-Item -ItemType Directory -Force -Path ".github\workflows" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\bak\.github\workflows\buildnew.yml" ".github\workflows\" -Force
+
+      - name: 自检
+        run: |
+          if (-not (Test-Path ".patches")) { Write-Host "❌ .patches 丢失"; exit 1 }
+          if (-not (Test-Path ".github\workflows\buildnew.yml")) { Write-Host "❌ 我的工作流丢失"; exit 1 }
+          Write-Host "✅ 自定义文件全部就位"
+
+
 
       # 应用你的补丁
       - name: 应用补丁
