@@ -33,6 +33,18 @@ jobs:
           git fetch upstream
           git reset --hard upstream/main
 
+
+      - name: 确认补丁存在
+        run: |
+          if (-not (Test-Path ".patches")) {
+            Write-Host "❌ .patches 不存在，仓库状态异常"
+            Get-ChildItem -Force
+            exit 1
+          }
+          Get-ChildItem .patches
+
+
+
       # 应用你的补丁
       - name: 应用补丁
         run: |
