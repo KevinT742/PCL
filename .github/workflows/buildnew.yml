@@ -43,11 +43,15 @@ jobs:
 
       - name: 还原自定义文件
         run: |
-          # 只还原你自己的工作流和补丁，不动上游的 .github 其他文件
+          # 还原补丁
           Copy-Item "$env:RUNNER_TEMP\bak\.patches" ".\" -Recurse -Force
-          # 精确还原你自己的工作流文件，而不是整个 .github
+          # 还原工作流（路径和备份步骤一致：\bak\wf\）
           New-Item -ItemType Directory -Force -Path ".github\workflows" | Out-Null
-          Copy-Item "$env:RUNNER_TEMP\bak\.github\workflows\buildnew.yml" ".github\workflows\" -Force
+          Copy-Item "$env:RUNNER_TEMP\bak\wf\buildnew.yml" ".github\workflows\" -Force
+          Write-Host "还原完成，验证："
+          Test-Path ".patches"
+          Test-Path ".github\workflows\buildnew.yml"
+
 
       - name: 自检
         run: |
