@@ -20,7 +20,7 @@ jobs:
         run: |
           git remote add upstream https://github.com/Meloong-Git/PCL.git
           git fetch upstream
-          git reset --hard main
+          git reset --hard upstream/main
 
       # 应用你的补丁
       - name: 应用补丁
@@ -36,7 +36,7 @@ jobs:
           git config user.email "bot@github.com"
           git add -A
           git commit -m "同步上游并应用补丁" || echo "没有变化"
-          git push main --force
+          git push origin main --force
 
       # 恢复 NuGet 依赖（PCL 项目需要）
       - name: 还原 NuGet 包
