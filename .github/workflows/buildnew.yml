@@ -22,9 +22,11 @@ jobs:
       # 拉取上游最新代码
       - name: 备份自定义文件
         run: |
-          mkdir _backup
-          Copy-Item -Recurse -Force .patches _backup/
-          Copy-Item -Recurse -Force .github _backup/
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\bak" | Out-Null
+          Copy-Item ".patches" "$env:RUNNER_TEMP\bak\" -Recurse -Force
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\bak\wf" | Out-Null
+          Copy-Item ".github\workflows\buildnew.yml" "$env:RUNNER_TEMP\bak\wf\" -Force
+
 
 
 
