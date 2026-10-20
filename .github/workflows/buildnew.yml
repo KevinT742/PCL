@@ -96,7 +96,11 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: MSBuild
-        run: msbuild "Plain Craft Launcher 2.sln" /p:Configuration=Release /p:Platform="Any CPU"
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          & $msbuild "Plain Craft Launcher 2.sln" -p:Configuration=Release -restore -m
+
 
       # 上传构建产物，方便调试（可选但推荐）
       - name: 上传构建产物（调试用）
