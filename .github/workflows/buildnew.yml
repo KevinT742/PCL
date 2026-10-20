@@ -122,24 +122,23 @@ jobs:
 
       - name: 打包
         run: |
-          Compress-Archive -Path "Plain Craft Launcher 2\bin\Release\*" `
-            -DestinationPath "$env:RUNNER_TEMP\PCL2-自动构建.zip"
-          # 拿到上游最新 commit 当版本号
+          $outDir = "Plain Craft Launcher 2\bin"
+          if (-not (Test-Path "$outDir\Plain Craft Launcher 2.exe")) {
+            Write-Host "❌ 找不到 exe"
+            exit 1
+          }
           $ver = git rev-parse --short HEAD
-          echo "VERSION=$ver" >>$env:GITHUB_ENV
-          echo "FILENAME=PCL2-$ver.zip" >>$env:GITHUB_ENV
-          Rename-Item "$env:RUNNER_TEMP\PCL2-自动构建.zip" "PCL2-$ver.zip"
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+          Compress-Archive -Path "Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe" `
+            -DestinationPath "PCL2-$ver.zip" -Force
+
 
       - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: auto-${{ env.VERSION }}
           name: 自动构建 ${{ env.VERSION }}
-          files: ${{ runner.temp }}/${{ env.FILENAME }}
-          body: |
-            自动同步上游并应用补丁的构建
-            - 上游 commit: ${{ env.VERSION }}
-            - 构建时间: ${{ github.run_id }}
+          files: PCL2-${{ env.VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
