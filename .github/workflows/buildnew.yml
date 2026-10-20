@@ -27,11 +27,6 @@ jobs:
 
 
 
-
-
-
-
-
       - name: 拉取上游更新
         run: |
           git remote add upstream https://github.com/Meloong-Git/PCL.git
@@ -41,7 +36,7 @@ jobs:
       # 应用你的补丁
       - name: 应用补丁
         run: |
-          foreach ($patch in Get-ChildItem .patches/*.patch) {
+          foreach ($patch in Get-ChildItem .patches/AllowMcDownload.patch) {
             git apply $patch.FullName
           }
 
