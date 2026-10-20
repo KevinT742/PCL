@@ -29,13 +29,13 @@ jobs:
           Copy-Item ".github\workflows\buildnew.yml" "$env:RUNNER_TEMP\bak\wf\" -Force
 
 
-
-
       - name: 拉取上游更新
         run: |
-          git remote add upstream https://github.com/Meloong-Git/PCL.git
+          git remote add upstream https://github.com/KevinT742/PCL.git
           git fetch upstream
           git reset --hard upstream/main
+          # 关键：移除上游自带的 workflow 文件，避免推送被拒
+          git rm -rf --ignore-unmatch .github/workflows
 
 
 
