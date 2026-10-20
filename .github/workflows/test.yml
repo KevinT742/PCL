@@ -1,4 +1,4 @@
-name: 自动同步上游并打包
+name: test
 
 on:
   schedule:
