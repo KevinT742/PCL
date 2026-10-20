@@ -34,14 +34,6 @@ jobs:
           git reset --hard upstream/main
 
 
-      - name: 确认补丁存在
-        run: |
-          if (-not (Test-Path ".patches")) {
-            Write-Host "❌ .patches 不存在，仓库状态异常"
-            Get-ChildItem -Force
-            exit 1
-          }
-          Get-ChildItem .patches
 
 
 
@@ -58,6 +50,14 @@ jobs:
             git apply $patch.FullName
           }
 
+
+      - name: 确认补丁存在
+        run: |
+          if (-not (Test-Path ".patches")) {
+            Write-Host "❌ .patches 不存在，仓库状态异常"
+            Get-ChildItem -Force
+          }
+          Get-ChildItem .patches
 
 
       # 提交同步后的代码
