@@ -112,6 +112,14 @@ jobs:
           path: |
             Plain Craft Launcher 2/bin/Release/*.exe
             Plain Craft Launcher 2/bin/Release/*.dll
+
+      - name: 查找输出文件
+        run: |
+          Get-ChildItem -Recurse -Filter "*.exe" | Where-Object { $_.FullName -notmatch "obj\\" } | Select-Object FullName
+          Get-ChildItem -Recurse -Directory -Filter "Release" | Select-Object FullName
+
+
+
       - name: 打包
         run: |
           Compress-Archive -Path "Plain Craft Launcher 2\bin\Release\*" `
