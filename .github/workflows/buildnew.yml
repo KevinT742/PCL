@@ -63,29 +63,26 @@ jobs:
 
       # 应用你的补丁
       - name: 应用补丁
-        run: |
-          foreach ($patch in Get-ChildItem .patches/AllowMcDownload.patch) {
-            git apply $patch.FullName
-          }
+        run: git apply .patches/*.patch
 
-
-      - name: 确认补丁存在
-        run: |
-          if (-not (Test-Path ".patches")) {
-            Write-Host "❌ .patches 不存在，仓库状态异常"
-            Get-ChildItem -Force
-          }
-          Get-ChildItem .patches
-
-
-      # 提交同步后的代码
-      - name: 提交
+      - name: 提交并推送
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "bot@github.com"
-          git add 。patches
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 只保留补丁文件，其他还原出来的东西不进提交
+          git add .patches
+          git reset -- .github "Plain Craft Launcher 2"   # 把误暂存的撤下来（保险起见）
+          git checkout -- "Plain Craft Launcher 2" 2>$null # 丢弃补丁对源码的改动（补丁文件本身已保存）
+
+          # 删掉还原出来的工作流文件，避免被 add 进去
+          Remove-Item ".github\workflows\buildnew.yml" -Force -ErrorAction SilentlyContinue
+          Remove-Item ".github\workflows\build.yml" -Force -ErrorAction SilentlyContinue
+          Remove-Item ".github\workflows\build.yml.disabled" -Force -ErrorAction SilentlyContinue
+
           git commit -m "同步上游并应用补丁" || echo "没有变化"
           git push origin main --force
+
 
       # 恢复 NuGet 依赖（PCL 项目需要）
       - name: 还原 NuGet 包
