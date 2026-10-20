@@ -2,12 +2,11 @@ name: 自动同步上游并打包
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 3 * * *' 
   workflow_dispatch:
 
 permissions:
   contents: write
-  workflows: write
 
 
 
@@ -80,7 +79,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "bot@github.com"
-          git add -A
+          git add 。patches
           git commit -m "同步上游并应用补丁" || echo "没有变化"
           git push origin main --force
 
