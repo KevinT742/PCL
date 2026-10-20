@@ -19,6 +19,19 @@ jobs:
 
 
       # 拉取上游最新代码
+      - name: 备份自定义文件
+        run: |
+          mkdir _backup
+          Copy-Item -Recurse -Force .patches _backup/
+          Copy-Item -Recurse -Force .github _backup/
+
+
+
+
+
+
+
+
       - name: 拉取上游更新
         run: |
           git remote add upstream https://github.com/Meloong-Git/PCL.git
@@ -31,6 +44,13 @@ jobs:
           foreach ($patch in Get-ChildItem .patches/*.patch) {
             git apply $patch.FullName
           }
+
+      - name: 还原自定义文件
+        run: |
+          Copy-Item -Recurse -Force _backup/.patches ./
+          Copy-Item -Recurse -Force _backup/.github ./
+          Remove-Item -Recurse -Force _backup
+
 
       # 提交同步后的代码
       - name: 提交
