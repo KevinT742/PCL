@@ -36,6 +36,8 @@ jobs:
           git reset --hard upstream/main
           # 关键：移除上游自带的 workflow 文件，避免推送被拒
           git rm -rf --ignore-unmatch .github/workflows
+          git submodule update --init --recursive 
+
 
 
 
