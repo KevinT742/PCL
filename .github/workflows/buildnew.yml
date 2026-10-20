@@ -89,7 +89,7 @@ jobs:
         uses: NuGet/setup-nuget@v2
 
       - name: NuGet restore
-        run: nuget restore Plain Craft Launcher 2.sln
+        run: nuget restore "Plain Craft Launcher 2.sln"
 
       # 用 MSBuild 编译
       - name: 编译
@@ -113,4 +113,4 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: 自动构建 #${{ github.run_number }}
-          files: Plain Craft Launcher 2/bin/Release/*.exe
+          files: "Plain Craft Launcher 2/bin/Release/*.exe"
