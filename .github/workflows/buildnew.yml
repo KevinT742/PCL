@@ -1,0 +1,70 @@
+name: 自动同步上游并打包
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest    # ⚠️ 关键：必须用 Windows 构建机
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 拉取上游最新代码
+      - name: 拉取上游更新
+        run: |
+          git remote add upstream https://github.com/Meloong-Git/PCL.git
+          git fetch upstream
+          git reset --hard upstream/2.0
+
+      # 应用你的补丁
+      - name: 应用补丁
+        run: |
+          foreach ($patch in Get-ChildItem .patches/*.patch) {
+            git apply $patch.FullName
+          }
+
+      # 提交同步后的代码
+      - name: 提交
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "bot@github.com"
+          git add -A
+          git commit -m "同步上游并应用补丁" || echo "没有变化"
+          git push origin 2.0 --force
+
+      # 恢复 NuGet 依赖（PCL 项目需要）
+      - name: 还原 NuGet 包
+        uses: NuGet/setup-nuget@v2
+
+      - name: NuGet restore
+        run: nuget restore Plain Craft Launcher 2.sln
+
+      # 用 MSBuild 编译
+      - name: 编译
+        uses: microsoft/setup-msbuild@v2
+
+      - name: MSBuild
+        run: msbuild "Plain Craft Launcher 2.sln" /p:Configuration=Release /p:Platform="Any CPU"
+
+      # 上传构建产物，方便调试（可选但推荐）
+      - name: 上传构建产物（调试用）
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL2-output
+          path: |
+            Plain Craft Launcher 2/bin/Release/*.exe
+            Plain Craft Launcher 2/bin/Release/*.dll
+
+      # 发布 Release
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: 自动构建 #${{ github.run_number }}
+          files: Plain Craft Launcher 2/bin/Release/*.exe
