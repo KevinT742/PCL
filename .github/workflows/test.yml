@@ -1,0 +1,88 @@
+name: test
+
+on:
+  schedule:
+    - cron: '0 3 * * *' 
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+
+
+jobs:
+  build:
+    runs-on: windows-latest    # ⚠️ 关键：必须用 Windows 构建机
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # sln 里含 MeloongCore 项目，而它是 submodule，不拉下来 MSBuild 会找不到 .csproj 直接失败
+          submodules: true
+
+      # main 上只保留补丁文件，源码是纯净上游，所以编译前必须先把补丁打上
+      - name: 应用补丁
+        id: patch
+        uses: ./.github/actions/apply-patches
+
+      # 恢复 NuGet 依赖（PCL 项目需要）
+      - name: 还原 NuGet 包
+        uses: NuGet/setup-nuget@v2
+
+      - name: NuGet restore
+        run: nuget restore "Plain Craft Launcher 2.sln"
+
+      # 用 MSBuild 编译
+      - name: 编译
+        uses: microsoft/setup-msbuild@v2
+
+      # 编译前的最后一道守卫：确认编译用的源码确实带补丁效果
+      - name: 编译前确认补丁效果仍在
+        uses: ./.github/actions/verify-patch-effect
+
+      - name: MSBuild
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          & $msbuild "Plain Craft Launcher 2.sln" -p:Configuration=Release -restore -m
+
+
+      # 上传构建产物，方便调试（可选但推荐）
+      - name: 上传构建产物（调试用）
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL2-output
+          path: |
+            Plain Craft Launcher 2/bin/Release/*.exe
+            Plain Craft Launcher 2/bin/Release/*.dll
+
+      - name: 查找输出文件
+        run: |
+          Get-ChildItem -Recurse -Filter "*.exe" | Where-Object { $_.FullName -notmatch "obj\\" } | Select-Object FullName
+          Get-ChildItem -Recurse -Directory -Filter "Release" | Select-Object FullName
+
+
+
+      - name: 打包
+        run: |
+          $outDir = "Plain Craft Launcher 2\bin"
+          if (-not (Test-Path "$outDir\Plain Craft Launcher 2.exe")) {
+            Write-Host "❌ 找不到 exe"
+            exit 1
+          }
+          $ver = git rev-parse --short HEAD
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+          Compress-Archive -Path "Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe" `
+            -DestinationPath "PCL2-$ver.zip" -Force
+
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 用 test- 前缀，避免与 buildnew.yml 的 auto- 前缀在同一提交上撞 tag
+          tag_name: test-${{ env.VERSION }}
+          name: 测试构建 ${{ env.VERSION }}
+          files: PCL2-${{ env.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
