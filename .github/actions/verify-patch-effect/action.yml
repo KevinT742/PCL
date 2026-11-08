@@ -1,0 +1,36 @@
+name: 校验补丁效果
+description: 确认源码里确实带有补丁效果，效果被撤销时失败。判据与上下文无关，上游改动邻近行也不会误报
+
+runs:
+  using: composite
+  steps:
+    - id: verify
+      shell: pwsh
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        . "$env:ACTION_PATH/../patch-lib.ps1"
+
+        $patches = Get-SourcePatches
+        if ($patches.Count -eq 0) { throw '没有找到任何可校验的源码补丁' }
+
+        # 判据（与上下文无关）：
+        #   补丁的新增行块必须在文件里恰好出现一次
+        #   补丁的被删行块必须一次都不再出现
+        # 这样无论效果是已提交、只在工作树里，还是上游改动了邻近行，都能正确判定；
+        # 只有效果真的被撤销时才会失败。
+        $checked = 0
+        foreach ($f in $patches) {
+            foreach ($pf in (Get-PatchFiles $f.FullName)) {
+                if (-not (Test-Path $pf.Path)) {
+                    throw "补丁涉及的文件不存在：$($pf.Path)"
+                }
+                if (-not (Test-PatchEffect $pf.Path $pf.Hunks)) {
+                    throw "补丁效果已从源码中消失：$($f.Name) → $($pf.Path)，拒绝编译（会产出未打补丁的 exe）"
+                }
+                Write-Host "  OK $($f.Name) → $($pf.Path)"
+                $checked++
+            }
+        }
+        Write-Host "✅ $checked 处补丁效果均已确认在源码中"
