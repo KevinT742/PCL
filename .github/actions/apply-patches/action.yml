@@ -1,0 +1,155 @@
+name: 应用补丁
+description: 收集源码补丁、按多级策略应用（上下文 → 3 路合并 → 内容级替换）、并确认补丁效果确实落到源码树里
+
+inputs:
+  assert-effect:
+    description: 结束时是否强制确认补丁效果已生效
+    default: 'true'
+  base-ref:
+    description: 可选。给定基准引用（如 upstream/main）时，校验工作树相对它的改动文件集合恰好等于补丁涉及的文件集合
+    default: ''
+
+outputs:
+  applied:
+    description: 处理过的补丁文件名（逗号分隔）
+    value: ${{ steps.core.outputs.applied }}
+  pending:
+    description: 本次实际应用的补丁文件名（逗号分隔）
+    value: ${{ steps.core.outputs.pending }}
+  method:
+    description: 每个补丁实际使用的应用方式
+    value: ${{ steps.core.outputs.method }}
+
+runs:
+  using: composite
+  steps:
+    - id: core
+      shell: pwsh
+      env:
+        ASSERT_EFFECT: ${{ inputs.assert-effect }}
+        BASE_REF: ${{ inputs.base-ref }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        . "$env:ACTION_PATH/../patch-lib.ps1"
+
+        $patches = Get-SourcePatches
+        if ($patches.Count -eq 0) { throw '没有找到任何可用的源码补丁' }
+
+        $handled = @()
+        $pending = @()
+        $methods = @()
+        foreach ($f in $patches) {
+            $parsed = Get-PatchFiles $f.FullName
+
+            # 策略一：效果是否已在源码里？
+            # 判据必须与上下文无关（用 Test-PatchEffect），
+            # 因为反向应用检查依赖上下文，上游改了邻近行时会误判成"未应用"。
+            $effectPresent = $true
+            foreach ($pf in $parsed) {
+                if (-not (Test-PatchEffect $pf.Path $pf.Hunks)) { $effectPresent = $false; break }
+            }
+            if ($effectPresent) {
+                Write-Host "==> $($f.Name)：效果已在源码中"
+                $handled += $f.Name
+                $methods += "$($f.Name)=已应用"
+                continue
+            }
+
+            # 策略二：上下文直接应用（标准做法，优先）
+            git apply --check --whitespace=nowarn -- $f.FullName 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "==> 应用 $($f.Name)（上下文匹配）"
+                git apply --whitespace=nowarn -- $f.FullName
+                if ($LASTEXITCODE -ne 0) { throw "补丁应用失败：$($f.Name)" }
+                $handled += $f.Name
+                $pending += $f.Name
+                $methods += "$($f.Name)=上下文"
+                continue
+            }
+
+            # 策略三：3 路合并（上游改了同一文件的其它地方时可能奏效）
+            Write-Host "==> $($f.Name)：上下文不匹配，尝试 3 路合并"
+            # 3 路合并失败时会把冲突标记写进文件，先快照，失败后还原，避免污染后续兜底
+            $snapshot = @{}
+            foreach ($pf in $parsed) {
+                if (Test-Path $pf.Path) { $snapshot[$pf.Path] = [System.IO.File]::ReadAllBytes($pf.Path) }
+            }
+            git apply --3way --whitespace=nowarn -- $f.FullName 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $conflicted = $false
+                foreach ($pf in $parsed) {
+                    if (Test-Path $pf.Path) {
+                        if (Select-String -Path $pf.Path -Pattern '^(<<<<<<<|=======|>>>>>>>)' -Quiet -ErrorAction SilentlyContinue) { $conflicted = $true }
+                    }
+                }
+                if (-not $conflicted) {
+                    Write-Host "==> 应用 $($f.Name)（3 路合并）"
+                    $handled += $f.Name
+                    $pending += $f.Name
+                    $methods += "$($f.Name)=3路合并"
+                    continue
+                }
+                Write-Host "    3 路合并产生冲突"
+            }
+            foreach ($k in $snapshot.Keys) { [System.IO.File]::WriteAllBytes($k, $snapshot[$k]) }
+            Write-Host "    已还原 3 路合并的副作用"
+
+            # 策略四：内容级兜底（与上下文无关，只按被删/新增的文本定位替换）
+            Write-Host "==> $($f.Name)：尝试内容级兜底"
+            $ok = $true
+            foreach ($pf in $parsed) {
+                if (-not (Invoke-ContentFallback $pf.Path $pf.Hunks)) { $ok = $false; break }
+            }
+            if ($ok) {
+                Write-Host "==> 应用 $($f.Name)（内容级替换）"
+                $handled += $f.Name
+                $pending += $f.Name
+                $methods += "$($f.Name)=内容级"
+                continue
+            }
+
+            throw "补丁既无法应用、也无法用任何兜底策略应用，已与当前源码脱节：$($f.Name)。上游若改动了相关源码，需要回到 patches 分支重新生成补丁。"
+        }
+
+        Write-Host "已处理 $($handled.Count) 个补丁：$($handled -join ', ')"
+        Write-Host "应用方式：$($methods -join ', ')"
+
+        # ---------- 确认补丁效果确实在源码树里 ----------
+        if ($env:ASSERT_EFFECT -eq 'true') {
+            $changed = @(git diff --name-only -- 'Plain Craft Launcher 2/')
+            $allPresent = $true
+            foreach ($f in $patches) {
+                foreach ($pf in (Get-PatchFiles $f.FullName)) {
+                    if (-not (Test-PatchEffect $pf.Path $pf.Hunks)) {
+                        Write-Host "  ✗ $($pf.Path)：补丁效果缺失"
+                        $allPresent = $false
+                    }
+                }
+            }
+            if (-not $allPresent) { throw '补丁效果校验失败，拒绝继续' }
+            if ($pending.Count -gt 0 -and $changed.Count -eq 0) {
+                throw '补丁已应用但源码无任何变化，补丁可能是空补丁或效果被撤销，拒绝继续'
+            }
+            Write-Host "==> 补丁效果已确认，涉及文件：$(($changed -join ', '))"
+        }
+
+        # ---------- 上游新功能保留校验 ----------
+        # 给定基准引用时：工作树相对基准的改动文件集合，必须恰好等于补丁涉及的文件集合。
+        # 多改一个文件都算失败 —— 防止补丁把上游的新功能覆盖掉。
+        if ($env:BASE_REF) {
+            $patchFiles = [System.Collections.Generic.List[string]]::new()
+            foreach ($f in $patches) {
+                foreach ($pf in (Get-PatchFiles $f.FullName)) { $patchFiles.Add($pf.Path) }
+            }
+            $changed = @(git diff --name-only $env:BASE_REF -- 'Plain Craft Launcher 2/')
+            $extra = @($changed | Where-Object { $patchFiles -notcontains $_ })
+            if ($extra.Count -gt 0) {
+                throw "相对基准 $($env:BASE_REF) 出现了补丁之外的文件改动：$($extra -join ', ')。补丁可能覆盖了上游的新功能，请检查补丁内容。"
+            }
+            Write-Host "==> 上游新功能保留校验通过：改动文件集合 = $($changed -join ', ')"
+        }
+
+        "applied=$($handled -join ', ')" >> $env:GITHUB_OUTPUT
+        "pending=$($pending -join ', ')" >> $env:GITHUB_OUTPUT
+        "method=$($methods -join ', ')" >> $env:GITHUB_OUTPUT
