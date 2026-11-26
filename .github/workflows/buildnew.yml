@@ -1,0 +1,152 @@
+name: 自动同步上游并打包
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest    # ⚠️ 关键：必须用 Windows 构建机
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      # 备份自定义文件：.patches 目录 + 整个 .github/workflows 目录 + 整个 .github/actions 目录
+      # 三个都要备份：reset --hard upstream/main 会把上游没有的目录整个删掉，
+      # 漏掉任何一个都会导致后续步骤找不到对应文件
+      - name: 备份自定义文件
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\bak" | Out-Null
+          Copy-Item ".patches" "$env:RUNNER_TEMP\bak\" -Recurse -Force
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\bak\wf" | Out-Null
+          Copy-Item ".github\workflows" "$env:RUNNER_TEMP\bak\wf\" -Recurse -Force
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\bak\act" | Out-Null
+          Copy-Item ".github\actions" "$env:RUNNER_TEMP\bak\act\" -Recurse -Force
+
+      - name: 拉取上游更新
+        run: |
+          # 上游是 Meloong-Git/PCL（不是本仓库自己，否则"同步上游"同步的是自己）
+          $upstream = "https://github.com/Meloong-Git/PCL.git"
+          if (git remote | Select-String -SimpleMatch "upstream") {
+            git remote set-url upstream $upstream
+          } else {
+            git remote add upstream $upstream
+          }
+          git fetch upstream
+          git reset --hard upstream/main
+          git submodule update --init --recursive
+
+      - name: 还原自定义文件
+        run: |
+          # 还原补丁
+          Copy-Item "$env:RUNNER_TEMP\bak\.patches" ".\" -Recurse -Force
+          # 还原整个工作流目录（上游自带的 build.yml 会被这一步一并顶掉，不入库）
+          if (Test-Path ".github\workflows") { Remove-Item ".github\workflows" -Recurse -Force }
+          Copy-Item "$env:RUNNER_TEMP\bak\wf\workflows" ".github\" -Recurse -Force
+          # 还原整个公共动作目录（apply-patches / verify-patch-effect 在这里）
+          if (Test-Path ".github\actions") { Remove-Item ".github\actions" -Recurse -Force }
+          Copy-Item "$env:RUNNER_TEMP\bak\act\actions" ".github\" -Recurse -Force
+          Write-Host "还原完成，验证："
+          Write-Host "  .patches                          = $(Test-Path '.patches')"
+          Write-Host "  .github/workflows                  = $(Test-Path '.github\workflows')"
+          Write-Host "  .github/actions                    = $(Test-Path '.github\actions')"
+          Get-ChildItem ".github\workflows" -File | ForEach-Object { Write-Host "    wf  - $($_.Name)" }
+          Get-ChildItem ".github\actions" -Recurse -File | ForEach-Object { Write-Host "    act - $($_.Name)" }
+
+      - name: 自检
+        run: |
+          if (-not (Test-Path ".patches")) { Write-Host "❌ .patches 丢失"; exit 1 }
+          if (-not (Test-Path ".github\workflows\buildnew.yml")) { Write-Host "❌ 我的工作流丢失"; exit 1 }
+          if (-not (Test-Path ".github\actions\apply-patches\action.yml")) { Write-Host "❌ 公共动作 apply-patches 丢失"; exit 1 }
+          if (-not (Test-Path ".github\actions\verify-patch-effect\action.yml")) { Write-Host "❌ 公共动作 verify-patch-effect 丢失"; exit 1 }
+          if (-not (Test-Path ".github\actions\patch-lib.ps1")) { Write-Host "❌ 公共库 patch-lib.ps1 丢失"; exit 1 }
+          Write-Host "✅ 自定义文件全部就位"
+
+      # 应用补丁：兼容"效果已在上游源码里"和"效果待应用"两种状态
+      # base-ref=upstream/main → 额外校验「相对上游的改动文件集合恰好等于补丁涉及的文件集合」，
+      # 确保上游的新功能一行都没被补丁覆盖掉
+      - name: 应用补丁
+        id: patch
+        uses: ./.github/actions/apply-patches
+        with:
+          base-ref: upstream/main
+
+      - name: 提交并推送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 提交上游代码 + 我们的补丁文件 + 我们的工作流 + 打好补丁的源码
+          # 注意：这里不能执行 `git checkout -- "Plain Craft Launcher 2"`，
+          # 那会把刚打上的补丁效果撤销掉，导致后面编译出未打补丁的 exe。
+          git add -A
+          git status --short
+          git commit -m "同步上游并应用补丁" || echo "没有变化"
+          git push origin main --force
+
+      # 恢复 NuGet 依赖（PCL 项目需要）
+      - name: 还原 NuGet 包
+        uses: NuGet/setup-nuget@v2
+
+      - name: NuGet restore
+        run: nuget restore "Plain Craft Launcher 2.sln"
+
+      # 用 MSBuild 编译
+      - name: 编译
+        uses: microsoft/setup-msbuild@v2
+
+      # 编译前的最后一道守卫：确认编译用的源码确实带补丁效果
+      - name: 编译前确认补丁效果仍在
+        uses: ./.github/actions/verify-patch-effect
+
+      - name: MSBuild
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          & $msbuild "Plain Craft Launcher 2.sln" -p:Configuration=Release -restore -m
+
+      # 上传构建产物，方便调试（可选但推荐）
+      - name: 上传构建产物（调试用）
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL2-output
+          path: |
+            Plain Craft Launcher 2/bin/Release/*.exe
+            Plain Craft Launcher 2/bin/Release/*.dll
+
+      - name: 查找输出文件
+        run: |
+          Get-ChildItem -Recurse -Filter "*.exe" | Where-Object { $_.FullName -notmatch "obj\\" } | Select-Object FullName
+          Get-ChildItem -Recurse -Directory -Filter "Release" | Select-Object FullName
+
+      # 产物级校验：确认补丁真的进了 exe，而不是只进了源码
+      - name: 校验产物已打上补丁
+        uses: ./.github/actions/verify-exe-patched
+
+      - name: 打包
+        run: |
+          $outDir = "Plain Craft Launcher 2\bin"
+          if (-not (Test-Path "$outDir\Plain Craft Launcher 2.exe")) {
+            Write-Host "❌ 找不到 exe"
+            exit 1
+          }
+          $ver = git rev-parse --short HEAD
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+          Compress-Archive -Path "Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe" `
+            -DestinationPath "PCL2-$ver.zip" -Force
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-${{ env.VERSION }}
+          name: 自动构建 ${{ env.VERSION }}
+          files: PCL2-${{ env.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

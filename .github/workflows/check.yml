@@ -1,0 +1,84 @@
+name: Check Patches
+
+# 补丁校验流水线：检查补丁能否干净应用、是否真的生效、并编译验证。
+#
+# 与 buildnew.yml / test.yml 的分工：
+#   buildnew.yml  负责「同步上游 → 应用补丁 → 编译 → 发布」
+#   test.yml      负责「定时编译 → 发布」
+#   check.yml（本文件）负责「校验补丁本身」，不发布任何东西
+#
+# 核心不变式：编译用的源码树必须确实带有补丁效果。
+# 补丁可能处于两种状态，本文件都要认：
+#   已应用  补丁效果已经提交进源码（git apply --reverse 能成功）
+#   待应用  补丁效果还没进源码，编译前需要先打上（git apply 能成功）
+# 两种都不成立 = 补丁与当前源码脱节，直接失败。
+on:
+  push:
+    branches:
+      - main
+      - patches
+    paths:
+      - '.patches/**'
+      - 'patches/**'
+      - 'Plain Craft Launcher 2/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  pull_request:
+    paths:
+      - '.patches/**'
+      - 'patches/**'
+      - 'Plain Craft Launcher 2/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 校验补丁 · 编译
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: 校验并应用补丁
+        id: patch
+        uses: ./.github/actions/apply-patches
+
+      - name: 确认补丁效果仍在
+        uses: ./.github/actions/verify-patch-effect
+
+      - name: 配置 MSBuild
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
+      - name: 还原 NuGet 包
+        run: dotnet restore PCLCS\PCLCS.csproj
+
+      - name: 编译 Release
+        run: msbuild "Plain Craft Launcher 2\Plain Craft Launcher 2.vbproj" -p:Configuration=Release
+
+      - name: 写入任务摘要
+        shell: pwsh
+        env:
+          APPLIED: ${{ steps.patch.outputs.applied }}
+          PENDING: ${{ steps.patch.outputs.pending }}
+          SHA: ${{ github.sha }}
+        run: |
+          $lines = @('### 补丁校验通过', '', '| 项 | 值 |', '| --- | --- |')
+          $lines += "| 源码补丁 | $env:APPLIED |"
+          $lines += "| 本次补打 | $(if ($env:PENDING) { $env:PENDING } else { '无' }) |"
+          $lines += "| 提交 | $env:SHA |"
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
